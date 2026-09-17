@@ -112,11 +112,48 @@ for arquivo, tabela in arquivos_para_tabelas.items():
 
 # COMMAND ----------
 
+hoje = date.today()
 
+data_inicio_formatada = dbutils.widgets.get("data_inicio").strip() or (hoje - timedelta(days=7)).strftime("%m-%d-%Y")
+data_fim_formatada = dbutils.widgets.get("data_fim").strip() or hoje.strftime("%m-%d-%Y")
+
+print(f"Período consultado: {data_inicio_formatada} até {data_fim_formatada}")
+
+url = (
+    "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/"
+    "CotacaoDolarPeriodo(dataInicial=@dataInicial,dataFinalCotacao=@dataFinalCotacao)"
+    f"?@dataInicial='{data_inicio_formatada}'"
+    f"&@dataFinalCotacao='{data_fim_formatada}'"
+    "&$select=dataHoraCotacao,cotacaoCompra"
+    "&$format=json"
+)
+
+resposta = requests.get(url, timeout=60)
+resposta.raise_for_status()
+
+cotacoes = resposta.json().get("value", [])
+print(f"{len(cotacoes)} cotações retornadas pela API")
 
 # COMMAND ----------
 
+if not cotacoes:
+    raise ValueError(
+        "A API não retornou nenhuma cotação no período. "
+        "Amplie o intervalo de datas — provavelmente a janela caiu inteira em fim de semana/feriado."
+    )
 
+df_cotacao = spark.createDataFrame(pd.DataFrame(cotacoes))
+df_cotacao = df_cotacao.withColumn("ingestion_datetime", current_timestamp())
+
+(
+    df_cotacao.write
+    .format("delta")
+    .mode("append")
+    .option("mergeSchema", "true")
+    .saveAsTable("bronze.tb_cotacao_dolar")
+)
+
+display(df_cotacao)
 
 # COMMAND ----------
 
